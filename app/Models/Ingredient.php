@@ -9,6 +9,8 @@ class Ingredient extends Model
 {
     use HasFactory;
 
+    protected $fillable = ['name'];
+
     public function openingStock()
     {
         return $this->hasOne(OpeningStock::class);
