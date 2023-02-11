@@ -7,6 +7,7 @@ use App\Models\Order;
 use App\Models\Product;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Collection as SupportCollection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 class StoreOrderService
@@ -34,25 +35,33 @@ class StoreOrderService
     public function handle(): void
     {
         $productIds = $this->productsById->keys();
-        $productsQuery = Product::whereIn('id', $productIds);
+        $productsQuery = Product::query()->whereIn('id', $productIds);
 
         if (count($productIds) !== $productsQuery->count()) {
             throw ValidationException::withMessages(['products' => 'One or more products not found']);
         }
 
-        $products = $productsQuery->with(['ingredients.stock', 'ingredients.openingStock'])->get();
+        try {
+            DB::beginTransaction();
+    
+            $products = $productsQuery->with(['ingredients.stock', 'ingredients.openingStock'])->lockForUpdate()->get();
+            if (!$this->isOrderValid($products)) {
+                throw ValidationException::withMessages(['products' => 'One or more products are not available please check the stock.']);
+            }
+    
+            $order = Order::create(['user_id' => 1]);
 
-        if (!$this->isOrderValid($products)) {
-            throw ValidationException::withMessages(['products' => 'One or more products are not available please check the stock.']);
+            $order->orderProducts()->attach($this->productsById);
+    
+            $products->each(function (Product $product) {
+                OrderProductService::updateStock($product, $this->productsById[$product->id]['quantity']);
+            });
+    
+            DB::commit();
+        } catch(\Exception $e) {
+            DB::rollBack();
+            throw $e;
         }
-
-        $order = Order::create(['user_id' => 1]);
-
-        $order->orderProducts()->attach($this->productsById);
-
-        $products->each(function (Product $product) {
-            OrderProductService::updateStock($product, $this->productsById[$product->id]['quantity']);
-        });
         
         event(new OrderCreatedEvent($order->id));
     }
